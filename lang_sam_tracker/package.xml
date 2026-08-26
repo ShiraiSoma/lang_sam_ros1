@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>lang_sam_tracker</name>
+  <version>0.0.1</version>
+  <description>A package that adds tracking to LangSAM</description>
+  <maintainer email="babaryusei.kw@gmail.com">Ryusei Baba</maintainer>
+  <license>Apache 2.0</license>
+
+  <!-- ビルドツール依存 -->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- ビルド時依存 -->
+  <build_depend>python3-dev</build_depend>
+
+  <!-- 実行時に必要な依存 -->
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>lang_sam_msgs</exec_depend>
+
+  <!-- AI/ML依存パッケージ(Cutieが使用) -->
+  <exec_depend>python3-torch</exec_depend>
+  <exec_depend>python3-torchvision</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <!-- 外部Pythonパッケージ -->
+  <exec_depend>python3-pip</exec_depend> <!-- supervision(可視化), cutieインストール用 -->
+
+  <export>
+  </export>
+</package>

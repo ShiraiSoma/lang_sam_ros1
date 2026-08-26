@@ -1,0 +1,3 @@
+# lang_sam_person_following ノードの private namespace (~param) にロードする想定
+image_width: 640   # 画像の幅(使用)
+kp_angular: 0.002  # 角速度の比例ゲイン(使用)

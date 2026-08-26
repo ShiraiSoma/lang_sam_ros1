@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!--
+  ロボット側PC(ROS1 Noetic)で起動する。Cutieトラッカー + 追従制御ノードを立ち上げる。
+
+  検出(lang_sam_detector)はROS2側(リモートGPU PC)で動作し、ros1_bridgeを介して
+  /lang_sam/detect_request, /lang_sam/detections をやり取りする。
+  ブリッジ・ROS2側検出ノードは別途起動しておくこと(README参照)。
+-->
+<launch>
+  <node pkg="lang_sam_tracker" type="lang_sam_tracker_node.py" name="lang_sam_tracker" output="screen">
+    <rosparam file="$(find lang_sam_bringup)/config/lang_sam_tracker.yaml" command="load" />
+  </node>
+
+  <node pkg="lang_sam_person_following" type="lang_sam_person_following_node" name="lang_sam_person_following" output="screen">
+    <rosparam file="$(find lang_sam_bringup)/config/lang_sam_person_following.yaml" command="load" />
+  </node>
+</launch>

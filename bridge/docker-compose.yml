@@ -1,0 +1,19 @@
+services:
+  ros1_bridge:
+    build: .
+    image: lang_sam_ros1_bridge:latest
+    # ROS1のTCPROS(roscore探索)とROS2のDDSマルチキャスト探索の両方が必要なため、
+    # コンテナのネットワークをホストと共有する
+    network_mode: host
+    # Fast-DDSの共有メモリ(SHM)トランスポートを使わせるため、IPC名前空間もホストと共有する
+    # (Dockerfile内でFASTDDS_BUILTIN_TRANSPORTS=UDPv4によりSHM自体は無効化済みのため
+    #  必須ではないが、他のRMW実装に切り替えた場合の保険として付けている)
+    ipc: host
+    environment:
+      # ロボット側PCでroscoreを動かす場合はそのURLを指定
+      - ROS_MASTER_URI=${ROS_MASTER_URI:-http://localhost:11311}
+      # このホスト(検出PC)のIP。ROS1ノードからの接続待受に使われる
+      - ROS_IP=${ROS_IP}
+      # 検出側(ROS2)ノードと共通のドメインID
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    restart: unless-stopped

@@ -1,0 +1,6 @@
+# prepare_context.sh が生成するDockerビルドコンテキスト(lang_sam_msgsのコピー)
+bridge/context/
+
+# Python
+__pycache__/
+*.pyc
