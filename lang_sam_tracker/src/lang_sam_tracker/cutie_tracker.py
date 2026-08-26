@@ -10,6 +10,11 @@ cutie.utils.get_default_model は使えない(initialize()が衝突する)。
 ここではGlobalHydraを手動で退避→クリアしてCutieのcfgを合成し、
 終了後にsam2側の状態を復元する。
 """
+# Python 3.8(Noetic既定)では `str | None` や `list[int]` のような
+# 新しい型ヒント記法は実行時にTypeError/AttributeErrorになるため、
+# 注釈の評価を遅延させて回避する(PEP 563)。
+from __future__ import annotations
+
 import os
 
 import cv2
