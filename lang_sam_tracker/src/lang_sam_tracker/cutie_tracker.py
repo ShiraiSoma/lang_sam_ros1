@@ -24,8 +24,14 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import open_dict
 
-CUTIE_WEIGHTS_URL = "https://github.com/hkchengrex/Cutie/releases/download/v1.0/cutie-base-mega.pth"
-DEFAULT_WEIGHTS_PATH = os.path.expanduser("~/.cache/cutie/cutie-base-mega.pth")
+# model_size ("base"/"small") ごとの既定チェックポイント。
+# "small" は pixel_encoder が resnet18(baseはresnet50)の軽量版で、
+# Jetson等の計算資源が限られる環境での速度向上を狙ったもの。
+# (Hydraのモデル定義は cutie/config/model/{base,small}.yaml として同梱されている)
+CUTIE_WEIGHTS_URLS = {
+    "base": "https://github.com/hkchengrex/Cutie/releases/download/v1.0/cutie-base-mega.pth",
+    "small": "https://github.com/hkchengrex/Cutie/releases/download/v1.0/cutie-small-mega.pth",
+}
 
 
 class CutieTracker:
@@ -37,6 +43,7 @@ class CutieTracker:
 
     def __init__(self,
                  device: str = "cuda",
+                 model_size: str = "base",
                  weights_path: str | None = None,
                  max_internal_size: int = 480,
                  mem_every: int = 5,
@@ -49,10 +56,17 @@ class CutieTracker:
         self.device = device
         self.use_amp = use_amp and str(device).startswith("cuda")
 
-        weights_path = weights_path or DEFAULT_WEIGHTS_PATH
+        model_size = (model_size or "base").lower()
+        if model_size not in CUTIE_WEIGHTS_URLS:
+            raise ValueError(
+                f"未知のcutie model_size: '{model_size}' "
+                f"(対応: {sorted(CUTIE_WEIGHTS_URLS.keys())})")
+
+        weights_path = weights_path or os.path.expanduser(
+            f"~/.cache/cutie/cutie-{model_size}-mega.pth")
         if not os.path.exists(weights_path):
             os.makedirs(os.path.dirname(weights_path), exist_ok=True)
-            torch.hub.download_url_to_file(CUTIE_WEIGHTS_URL, weights_path)
+            torch.hub.download_url_to_file(CUTIE_WEIGHTS_URLS[model_size], weights_path)
 
         config_dir = os.path.join(list(cutie_pkg.__path__)[0], "config")
         gh = GlobalHydra.instance()
@@ -61,7 +75,7 @@ class CutieTracker:
         try:
             with initialize_config_dir(version_base="1.3.2", config_dir=config_dir,
                                        job_name="cutie_streaming"):
-                cfg = compose(config_name="eval_config")
+                cfg = compose(config_name="eval_config", overrides=[f"model={model_size}"])
         finally:
             # sam2等が初期化していたグローバル状態を復元
             # (hydraのコンテキストマネージャはGlobalHydraシングルトン自体を

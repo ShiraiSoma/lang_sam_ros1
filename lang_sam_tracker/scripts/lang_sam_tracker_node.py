@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rospy
 from sensor_msgs.msg import Image as ROSImage
+from sensor_msgs.msg import CompressedImage
 
 from cv_bridge import CvBridge
 from PIL import Image as PILImage
@@ -31,6 +32,7 @@ class LangSamTrackerNode:
         #       このプロセスではSAM2のHydraグローバル初期化と衝突する心配はない
         self.cutie = CutieTracker(
             device=self.device,
+            model_size=self.cutie_model_size,
             weights_path=(self.cutie_weights or None),
             max_internal_size=self.cutie_max_internal_size,
             mem_every=self.cutie_mem_every,
@@ -60,7 +62,7 @@ class LangSamTrackerNode:
         self.tracks_pub = rospy.Publisher('/lang_sam/tracks', TrackArray, queue_size=1)
 
         # リモートLangSAM検出ノード(ros1_bridge経由でROS2側)とのI/O(detect_request送信 / detections受信)
-        self.detect_request_pub = rospy.Publisher(self.detect_request_topic, ROSImage, queue_size=1)
+        self.detect_request_pub = rospy.Publisher(self.detect_request_topic, CompressedImage, queue_size=1)
         self.detections_sub = rospy.Subscriber(
             self.detect_response_topic, DetectionArray, self._on_detections, queue_size=1)
 
@@ -99,6 +101,7 @@ class LangSamTrackerNode:
         self.detect_timeout_multiplier = float(rospy.get_param('~detect_timeout_multiplier', 3.0))
 
         # Cutie(VOS)のROSパラメータ
+        self.cutie_model_size = rospy.get_param('~cutie_model_size', 'base')     # base(resnet50,高精度) / small(resnet18,高速)
         self.cutie_weights = rospy.get_param('~cutie_weights', '')              # 空なら~/.cache/cutie/へ自動ダウンロード
         self.cutie_max_internal_size = int(rospy.get_param('~cutie_max_internal_size', 480))  # 内部処理の最小辺(px)。小さいほど速い/粗い
         self.cutie_mem_every = int(rospy.get_param('~cutie_mem_every', 5))       # メモリ記銘の間隔(フレーム)
@@ -449,17 +452,21 @@ class LangSamTrackerNode:
             self.pending_since = now
 
         # リモートのlang_sam_detectorへ検出リクエストを送信(ros1_bridge経由でROS2側へ)
-        # 注意: この環境ではcv_bridge.cv2_to_imgmsgの多チャンネルエンコード(bgr8等)が
-        # opencv-python側との不整合でKeyErrorになるため、Imageメッセージを直接組み立てる
-        # (受信側のimgmsg_to_cv2は正常に動作する)
-        img_msg = ROSImage()
+        # 生データ(bgr8)だと1枚あたり数百KB〜1MB近くになり、ros1_bridge越しに送ると
+        # 詰まりやすい(discoveryは通るのに実データが届かない事例を確認済み)ため、
+        # JPEG圧縮して送る。
+        ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            rospy.logwarn('JPEGエンコードに失敗したため検出リクエストを送信しません')
+            with self.state_lock:
+                self.pending_stamp = None
+                self.pending_frame = None
+            return
+        img_msg = CompressedImage()
         img_msg.header.stamp = stamp
         img_msg.header.frame_id = 'camera'
-        img_msg.height, img_msg.width = frame.shape[:2]
-        img_msg.encoding = 'bgr8'
-        img_msg.is_bigendian = 0
-        img_msg.step = frame.shape[1] * 3
-        img_msg.data = frame.tobytes()
+        img_msg.format = 'jpeg'
+        img_msg.data = jpeg.tobytes()
         self.detect_request_pub.publish(img_msg)
 
     def _on_detections(self, msg: DetectionArray):

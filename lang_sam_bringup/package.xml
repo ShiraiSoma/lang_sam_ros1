@@ -2,12 +2,13 @@
 <package format="2">
   <name>lang_sam_bringup</name>
   <version>0.0.1</version>
-  <description>Launch files and parameters for the ROS1 (tracker side) lang_sam nodes</description>
+  <description>Launch files and parameters for the ROS1 (robot side) lang_sam nodes</description>
   <maintainer email="babaryusei.kw@gmail.com">Ryusei Baba</maintainer>
   <license>Apache 2.0</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <exec_depend>lang_sam_client</exec_depend>
   <exec_depend>lang_sam_tracker</exec_depend>
   <exec_depend>lang_sam_person_following</exec_depend>
 </package>

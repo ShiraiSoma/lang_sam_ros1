@@ -9,6 +9,12 @@ services:
     # (Dockerfile内でFASTDDS_BUILTIN_TRANSPORTS=UDPv4によりSHM自体は無効化済みのため
     #  必須ではないが、他のRMW実装に切り替えた場合の保険として付けている)
     ipc: host
+    # ROS1ノードがROS_IP/ROS_HOSTNAME未設定だと自身をOSのホスト名で他ノードに広告するため、
+    # コンテナ側でそのホスト名を解決できないとTCPROS接続(実データ転送)に失敗する
+    # ("couldn't resolve publisher host [xxx]" エラー)。ROS1ホスト側の全ターミナルで
+    # ROS_IP/ROS_HOSTNAMEを設定するのが根本対策だが、保険としてここでも名前解決を教えておく。
+    extra_hosts:
+      - "${ROS1_HOSTNAME:-ros1-host}:${ROS1_HOST_IP:-127.0.0.1}"
     environment:
       # ロボット側PCでroscoreを動かす場合はそのURLを指定
       - ROS_MASTER_URI=${ROS_MASTER_URI:-http://localhost:11311}

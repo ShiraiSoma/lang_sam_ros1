@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!--
+  ロボット側PC(ROS1 Noetic)で起動する。クライアント(フレーム送信・結果表示) + 追従制御ノードを立ち上げる。
+
+  検出(lang_sam_detector)・追跡(lang_sam_tracker, Cutie)はどちらも検出PC(ROS2)側で動作し、
+  ros1_bridgeを介して /lang_sam/frame を送り、/lang_sam/tracks, /lang_sam/track_mask,
+  /lang_sam/detections を受け取る。推論は行わないため、ロボット側PCにGPUは不要。
+  ブリッジ・ROS2側ノード(lang_sam_server.launch.py)は別途起動しておくこと(README参照)。
+-->
+<launch>
+  <node pkg="lang_sam_client" type="lang_sam_client_node.py" name="lang_sam_client" output="screen">
+    <rosparam file="$(find lang_sam_bringup)/config/lang_sam_client.yaml" command="load" />
+  </node>
+
+  <node pkg="lang_sam_person_following" type="lang_sam_person_following_node" name="lang_sam_person_following" output="screen">
+    <rosparam file="$(find lang_sam_bringup)/config/lang_sam_person_following.yaml" command="load" />
+  </node>
+</launch>

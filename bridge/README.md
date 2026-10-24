@@ -95,15 +95,17 @@ docker run --rm --network host --ipc host \
 ```bash
 # ロボット側PC(ROS1)で
 rostopic list | grep lang_sam
-rostopic hz /lang_sam/detect_request
+rostopic hz /lang_sam/tracks
 
 # 検出PC(ROS2、ホスト側で)で
 ros2 topic list | grep lang_sam
-ros2 topic hz /lang_sam/detections
+ros2 topic hz /lang_sam/frame
 ```
 
-双方に `/lang_sam/detect_request`, `/lang_sam/detections` が現れ、`lang_sam_tracker` の起動後に
-`rostopic hz`/`ros2 topic hz` でデータが流れていることを確認する。
+双方に `/lang_sam/frame`, `/lang_sam/tracks`, `/lang_sam/track_mask`, `/lang_sam/detections` が現れ、
+`lang_sam_client` の起動後に `rostopic hz`/`ros2 topic hz` でデータが流れていることを確認する。
+(標準構成では `/lang_sam/detect_request` は検出PCのROS2内で完結するためブリッジされない。
+旧構成(ロボットPCで`lang_sam_tracker`)の場合は `/lang_sam/detect_request`, `/lang_sam/detections` を確認する)
 
 ## 動作検証の方法(このホストだけで疑似2台構成を再現する場合)
 
@@ -133,3 +135,32 @@ ros2 topic echo /lang_sam/detect_request
   ビルドエラーになるため無効化している(`-DBUILD_TESTING=OFF`)。ブリッジ本体の動作には影響しない。
 - 本家 `ros2/ros1_bridge` リポジトリに `humble` 等ディストロ別ブランチは存在せず、`master` を
   そのままビルドする(distro非依存のコードのため)。
+
+### 実データが流れない場合(discoveryは成功するのにtopic echo/hzで何も来ない)
+
+ブリッジのログに以下のようなエラーが出ていないか確認する。
+
+```
+[ERROR] couldn't resolve publisher host [<ROS1側のホスト名>]
+Failed to connect to /xxx (<ホスト名>:<port>)
+```
+
+これはROS1ノードが`ROS_IP`/`ROS_HOSTNAME`未設定のままOSのホスト名で自身を広告し、
+ブリッジ側からそのホスト名を名前解決できないために実データ転送(TCPROS)だけが失敗している状態
+(roscoreへのトピック一覧問い合わせ等、マスター経由のXML-RPC通信は名前解決不要なので成功して見える)。
+
+**根本対策**: ROS1ホスト側の全ターミナル(roscore・カメラドライバ・tracker等、起動するもの全て)で
+`ROS_IP`(または`ROS_HOSTNAME`)を明示的に設定してから起動する。`~/.bashrc`に書いておくと
+ターミナルごとの設定漏れを防げる。
+
+```bash
+echo 'export ROS_IP=<ROS1ホストのIP>' >> ~/.bashrc
+```
+
+**保険**: `docker-compose.yml`の`extra_hosts`でブリッジコンテナにホスト名解決を教えておく。
+
+```bash
+export ROS1_HOSTNAME=<ROS1ホストの`hostname`出力>
+export ROS1_HOST_IP=<ROS1ホストのIP>
+docker compose up
+```
