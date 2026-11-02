@@ -77,6 +77,7 @@ class LangSamClientNode:
             self.stats_timer = rospy.Timer(rospy.Duration(self.stats_log_sec), self._log_stats)
 
         self.frame_pub = rospy.Publisher(self.frame_topic, CompressedImage, queue_size=1)
+        self.view_pub = rospy.Publisher(self.view_topic, CompressedImage, queue_size=1) if self.publish_view else None
         self.image_sub = rospy.Subscriber(
             self.image_topic, ROSImage, self.image_callback, queue_size=1, buff_size=IMAGE_BUFF_SIZE)
         self.tracks_sub = rospy.Subscriber(self.tracks_topic, TrackArray, self._on_tracks, queue_size=1)
@@ -96,6 +97,8 @@ class LangSamClientNode:
         rospy.loginfo(f'Track mask topic: {self.track_mask_topic}')
         rospy.loginfo(f'Detections lite topic: {self.detections_lite_topic}')
         rospy.loginfo(f'Detection mask topic: {self.detection_mask_topic}')
+        if self.publish_view:
+            rospy.loginfo(f'View topic (表示画像): {self.view_topic}')
         rospy.loginfo('LangSAM Client initialized.')
 
     def _setup_parameters(self):
@@ -109,6 +112,10 @@ class LangSamClientNode:
         self.stream_max_fps = float(rospy.get_param('~stream_max_fps', 0.0))       # 送信フレームレートの上限。0以下で無制限(カメラのレート)
         self.frame_buffer_size = int(rospy.get_param('~frame_buffer_size', 300))   # 結果と対応付けるため保持する送信済みフレーム数
         self.visualize = bool(rospy.get_param('~visualize', True))
+        # 表示中の画像(検出+追跡パネル、FPS/RTT表示込み)をJPEGでpublishする(rosbagで画面をそのまま記録する用)
+        self.publish_view = bool(rospy.get_param('~publish_view', False))
+        self.view_topic = rospy.get_param('~view_topic', '/lang_sam/client_view/compressed')
+        self.view_jpeg_quality = int(rospy.get_param('~view_jpeg_quality', 80))
         self.stats_log_sec = float(rospy.get_param('~stats_log_sec', 5.0))       # 計測ログを出す周期(秒)。0以下で無効
 
     # --- 処理時間・件数の計測 ---
@@ -246,7 +253,7 @@ class LangSamClientNode:
 
     def _render_tracking(self, tracks_msg: TrackArray, mask_msg: CompressedImage):
         self._record_track_event(tracks_msg.header.stamp)
-        if not self.visualize:
+        if not (self.visualize or self.publish_view):
             return
         t_render = time.perf_counter()
 
@@ -274,7 +281,7 @@ class LangSamClientNode:
             return
         view = self._compose(track_vis)
         with self.lock:
-            self.latest_view = view
+            self.latest_view = (view, tracks_msg.header.stamp)
             self.stats['render'].append(time.perf_counter() - t_render)
 
     # --- 検出結果の受信 ---
@@ -291,7 +298,7 @@ class LangSamClientNode:
     def _render_detection(self, msg: DetectionArray, mask_msg: CompressedImage):
         with self.lock:
             self._update_ema_fps(time.time(), 'det_last_time', 'det_fps')
-        if not self.visualize:
+        if not (self.visualize or self.publish_view):
             return
 
         frame = self._lookup_frame(msg.header.stamp)
@@ -374,15 +381,28 @@ class LangSamClientNode:
         cv2.putText(combined, 'Tracking', (det_vis.shape[1] + 10, 30), font, font_scale, (0, 255, 0), 2, cv2.LINE_AA)
         return combined
 
+    def _publish_view(self, view, stamp):
+        ok, jpeg = cv2.imencode('.jpg', view, [cv2.IMWRITE_JPEG_QUALITY, self.view_jpeg_quality])
+        if not ok:
+            rospy.logwarn('表示画像のJPEGエンコードに失敗しました')
+            return
+        msg = CompressedImage()
+        msg.header.stamp = stamp   # 元フレームのstamp(受信=表示時刻はrosbagの記録時刻で分かる)
+        msg.format = 'jpeg'
+        msg.data = jpeg.tobytes()
+        self.view_pub.publish(msg)
+
     def spin(self):
         # OpenCVのGUIはスレッド安全でないため、表示はメインスレッドのループでまとめて行う
         rate = rospy.Rate(60)
         while not rospy.is_shutdown():
+            with self.lock:
+                latest, self.latest_view = self.latest_view, None
+            if latest is not None and self.view_pub is not None:
+                self._publish_view(*latest)
             if self.visualize:
-                with self.lock:
-                    view, self.latest_view = self.latest_view, None
-                if view is not None:
-                    cv2.imshow('LangSAM', view)
+                if latest is not None:
+                    cv2.imshow('LangSAM', latest[0])
                 cv2.waitKey(1)
             try:
                 rate.sleep()
