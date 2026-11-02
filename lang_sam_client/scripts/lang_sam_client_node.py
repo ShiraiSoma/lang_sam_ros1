@@ -12,7 +12,7 @@ stampがそのまま返ってくるので、それをキーに元フレームと
 """
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 import cv2
 import numpy as np
@@ -25,8 +25,12 @@ from sensor_msgs.msg import Image as ROSImage
 from lang_sam_client.vis_utils import draw_image
 from lang_sam_msgs.msg import DetectionArray, TrackArray
 
-# 追跡結果(tracks/mask)の片方だけ届いた状態で保持しておく最大件数
+# 結果(tracks/mask, detections_lite/mask)の片方だけ届いた状態で保持しておく最大件数
 MAX_PENDING_RESULTS = 30
+
+# 追跡FPS・RTTを集計する時間窓(秒)。結果は回線の都合でまとめて届くことがあり、
+# 到着間隔の逆数(1/dt)だと値が跳ね上がるため、窓内の件数で数える
+STATS_WINDOW_SEC = 1.0
 
 # rospyは既定の受信バッファが小さく、画像のような大きいメッセージだと遅延が溜まるため広げる
 IMAGE_BUFF_SIZE = 2 ** 24
@@ -48,20 +52,22 @@ class LangSamClientNode:
         # rospyはサブスクライバごとに別スレッドでコールバックを呼ぶため、共有状態はロックで保護する
         self.lock = threading.Lock()
 
-        # 送信済みフレーム(JPEGバイト列)をstampで引けるよう保持する
+        # 送信済みフレーム(JPEGバイト列, 送信時刻)をstampで引けるよう保持する
+        # (送信時刻はRTT計測用。ロボットPCの時計だけで測るので両PCの時計ずれの影響を受けない)
         self.sent_frames = OrderedDict()
         self.last_sent_time = None
 
-        # 追跡結果は2トピックに分かれて届くため、stampが揃うまで待つ
+        # 追跡結果・検出結果はそれぞれ2トピックに分かれて届くため、stampが揃うまで待つ
         self.pending_tracks = OrderedDict()
         self.pending_masks = OrderedDict()
+        self.pending_dets = OrderedDict()
+        self.pending_det_masks = OrderedDict()
 
         # 表示用の状態(cv2.imshowはメインスレッドで行うため、描画済み画像を受け渡す)
         self.latest_det_vis = None
         self.latest_view = None
         self.fps_alpha = 0.1
-        self.track_last_time = None
-        self.track_fps = 0.0
+        self.track_events = deque()   # (受信時刻, RTT[s]) 直近STATS_WINDOW_SEC分
         self.det_last_time = None
         self.det_fps = 0.0
 
@@ -71,14 +77,20 @@ class LangSamClientNode:
         self.tracks_sub = rospy.Subscriber(self.tracks_topic, TrackArray, self._on_tracks, queue_size=1)
         self.track_mask_sub = rospy.Subscriber(
             self.track_mask_topic, CompressedImage, self._on_track_mask, queue_size=1, buff_size=IMAGE_BUFF_SIZE)
+        # 検出結果はマスク抜きのDetectionArrayとPNGマスクに分かれて届く
+        # (非圧縮マスク付きの/lang_sam/detectionsは購読しないので、ros1_bridgeも転送しない)
         self.detections_sub = rospy.Subscriber(
-            self.detections_topic, DetectionArray, self._on_detections, queue_size=1, buff_size=IMAGE_BUFF_SIZE)
+            self.detections_lite_topic, DetectionArray, self._on_detections, queue_size=1)
+        self.detection_mask_sub = rospy.Subscriber(
+            self.detection_mask_topic, CompressedImage, self._on_detection_mask, queue_size=1,
+            buff_size=IMAGE_BUFF_SIZE)
 
         rospy.loginfo(f'Image topic: {self.image_topic}')
         rospy.loginfo(f'Frame topic (to tracker): {self.frame_topic}')
         rospy.loginfo(f'Tracks topic: {self.tracks_topic}')
         rospy.loginfo(f'Track mask topic: {self.track_mask_topic}')
-        rospy.loginfo(f'Detections topic: {self.detections_topic}')
+        rospy.loginfo(f'Detections lite topic: {self.detections_lite_topic}')
+        rospy.loginfo(f'Detection mask topic: {self.detection_mask_topic}')
         rospy.loginfo('LangSAM Client initialized.')
 
     def _setup_parameters(self):
@@ -86,7 +98,8 @@ class LangSamClientNode:
         self.frame_topic = rospy.get_param('~frame_topic', '/lang_sam/frame')
         self.tracks_topic = rospy.get_param('~tracks_topic', '/lang_sam/tracks')
         self.track_mask_topic = rospy.get_param('~track_mask_topic', '/lang_sam/track_mask')
-        self.detections_topic = rospy.get_param('~detections_topic', '/lang_sam/detections')
+        self.detections_lite_topic = rospy.get_param('~detections_lite_topic', '/lang_sam/detections_lite')
+        self.detection_mask_topic = rospy.get_param('~detection_mask_topic', '/lang_sam/detection_mask')
         self.jpeg_quality = int(rospy.get_param('~jpeg_quality', 85))              # 送信フレームのJPEG品質
         self.stream_max_fps = float(rospy.get_param('~stream_max_fps', 0.0))       # 送信フレームレートの上限。0以下で無制限(カメラのレート)
         self.frame_buffer_size = int(rospy.get_param('~frame_buffer_size', 300))   # 結果と対応付けるため保持する送信済みフレーム数
@@ -106,10 +119,31 @@ class LangSamClientNode:
 
     def _lookup_frame(self, stamp):
         with self.lock:
-            jpeg = self.sent_frames.get(_stamp_key(stamp))
-        if jpeg is None:
+            entry = self.sent_frames.get(_stamp_key(stamp))
+        if entry is None:
             return None
-        return cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        return cv2.imdecode(np.frombuffer(entry[0], dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    # --- 追跡FPS・RTT(直近STATS_WINDOW_SEC秒の窓で集計) ---
+    def _record_track_event(self, stamp):
+        now = time.time()
+        with self.lock:
+            entry = self.sent_frames.get(_stamp_key(stamp))
+            rtt = now - entry[1] if entry is not None else None
+            self.track_events.append((now, rtt))
+            self._trim_track_events(now)
+
+    def _trim_track_events(self, now):
+        while self.track_events and now - self.track_events[0][0] > STATS_WINDOW_SEC:
+            self.track_events.popleft()
+
+    def _track_stats(self):
+        """(追跡FPS, 平均RTT[ms] or None) を返す。ロック取得済みで呼ぶこと"""
+        self._trim_track_events(time.time())
+        fps = len(self.track_events) / STATS_WINDOW_SEC
+        rtts = [r for _, r in self.track_events if r is not None]
+        rtt_ms = 1000.0 * sum(rtts) / len(rtts) if rtts else None
+        return fps, rtt_ms
 
     # --- フレーム送信 ---
     def image_callback(self, msg: ROSImage):
@@ -132,7 +166,7 @@ class LangSamClientNode:
         frame_msg.data = jpeg.tobytes()
 
         with self.lock:
-            self.sent_frames[_stamp_key(frame_msg.header.stamp)] = frame_msg.data
+            self.sent_frames[_stamp_key(frame_msg.header.stamp)] = (frame_msg.data, time.time())
             while len(self.sent_frames) > self.frame_buffer_size:
                 self.sent_frames.popitem(last=False)
 
@@ -141,30 +175,34 @@ class LangSamClientNode:
 
     # --- 追跡結果の受信 ---
     def _on_tracks(self, msg: TrackArray):
-        self._store_pending(self.pending_tracks, msg)
+        pair = self._store_pending(self.pending_tracks, self.pending_masks, msg)
+        if pair is not None:
+            self._render_tracking(*pair)
 
     def _on_track_mask(self, msg: CompressedImage):
-        self._store_pending(self.pending_masks, msg)
+        pair = self._store_pending(self.pending_masks, self.pending_tracks, msg)
+        if pair is not None:
+            self._render_tracking(pair[1], pair[0])
 
-    def _store_pending(self, store, msg):
+    def _store_pending(self, store, other, msg):
+        """msgをstoreに入れ、同じstampの片割れがotherにあれば (msg, 片割れ) を返す"""
         key = _stamp_key(msg.header.stamp)
         with self.lock:
             store[key] = msg
             while len(store) > MAX_PENDING_RESULTS:
                 store.popitem(last=False)
-            if key not in self.pending_tracks or key not in self.pending_masks:
-                return
-            tracks_msg = self.pending_tracks.pop(key)
-            mask_msg = self.pending_masks.pop(key)
+            if key not in other:
+                return None
+            store.pop(key)
+            partner = other.pop(key)
             # 対応が取れたものより古い片割れは今後揃うことがないので捨てる
-            for s in (self.pending_tracks, self.pending_masks):
+            for s in (store, other):
                 for k in [k for k in s if k < key]:
                     del s[k]
-        self._render_tracking(tracks_msg, mask_msg)
+        return msg, partner
 
     def _render_tracking(self, tracks_msg: TrackArray, mask_msg: CompressedImage):
-        with self.lock:
-            self._update_ema_fps(time.time(), 'track_last_time', 'track_fps')
+        self._record_track_event(tracks_msg.header.stamp)
         if not self.visualize:
             return
 
@@ -196,6 +234,16 @@ class LangSamClientNode:
 
     # --- 検出結果の受信 ---
     def _on_detections(self, msg: DetectionArray):
+        pair = self._store_pending(self.pending_dets, self.pending_det_masks, msg)
+        if pair is not None:
+            self._render_detection(*pair)
+
+    def _on_detection_mask(self, msg: CompressedImage):
+        pair = self._store_pending(self.pending_det_masks, self.pending_dets, msg)
+        if pair is not None:
+            self._render_detection(pair[1], pair[0])
+
+    def _render_detection(self, msg: DetectionArray, mask_msg: CompressedImage):
         with self.lock:
             self._update_ema_fps(time.time(), 'det_last_time', 'det_fps')
         if not self.visualize:
@@ -205,11 +253,11 @@ class LangSamClientNode:
         if frame is None:
             rospy.logdebug('対応する送信済みフレームがない検出結果を破棄します')
             return
-        try:
-            idx_mask = self.bridge.imgmsg_to_cv2(msg.index_mask, desired_encoding='mono16').astype(np.int32)
-        except Exception as e:
-            rospy.logerr(f'index_maskのデコードに失敗: {e}')
+        idx_mask = cv2.imdecode(np.frombuffer(bytes(mask_msg.data), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if idx_mask is None or idx_mask.shape[:2] != frame.shape[:2]:
+            rospy.logwarn('検出マスクのデコードに失敗、またはフレームとサイズが一致しません')
             return
+        idx_mask = idx_mask.astype(np.int32)
 
         n = len(msg.detections)
         h, w = idx_mask.shape
@@ -237,21 +285,27 @@ class LangSamClientNode:
             return None
 
     @staticmethod
-    def _put_fps(image, fps):
+    def _put_fps(image, fps, rtt_ms=None):
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = max(0.6, image.shape[1] / 1000.0)
         thickness = 2
-        text = f'FPS: {fps:.1f}'
-        (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
-        x = max(10, image.shape[1] - 10 - tw)  # 右端に寄せ、最小余白を確保
-        y = 10 + th
-        cv2.putText(image, text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+        lines = [f'FPS: {fps:.1f}']
+        if rtt_ms is not None:
+            lines.append(f'RTT: {rtt_ms:.0f} ms')   # フレーム送信から追跡結果受信までの往復時間
+        y = 10
+        for text in lines:
+            (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+            x = max(10, image.shape[1] - 10 - tw)  # 右端に寄せ、最小余白を確保
+            y += th
+            cv2.putText(image, text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+            y += 10
 
     def _compose(self, track_vis):
-        # 検出可視化と追跡可視化を横並びにする(FPSを描画)
+        # 検出可視化と追跡可視化を横並びにする(FPS・RTTを描画)
         with self.lock:
             latest_det_vis = self.latest_det_vis
-            det_fps, track_fps = self.det_fps, self.track_fps
+            det_fps = self.det_fps
+            track_fps, rtt_ms = self._track_stats()
         h_trk, w_trk = track_vis.shape[:2]
         if latest_det_vis is None:
             det_vis = np.zeros((h_trk, w_trk, 3), dtype=np.uint8)
@@ -264,7 +318,7 @@ class LangSamClientNode:
                 det_vis = cv2.resize(det_vis, (int(w_det * h_trk / h_det), h_trk))
 
         self._put_fps(det_vis, det_fps)
-        self._put_fps(track_vis, track_fps)
+        self._put_fps(track_vis, track_fps, rtt_ms)
 
         combined = np.hstack([det_vis, track_vis])
 

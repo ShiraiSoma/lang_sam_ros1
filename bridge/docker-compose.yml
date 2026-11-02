@@ -2,6 +2,9 @@ services:
   ros1_bridge:
     build: .
     image: lang_sam_ros1_bridge:latest
+    # --bridge-all-topics(Dockerfileの既定CMD)だと/usb_cam/image_raw等の生画像まで全て転送して
+    # 回線を圧迫するため、反対側に購読者がいるトピックだけをブリッジする
+    command: ["ros2", "run", "ros1_bridge", "dynamic_bridge"]
     # ROS1のTCPROS(roscore探索)とROS2のDDSマルチキャスト探索の両方が必要なため、
     # コンテナのネットワークをホストと共有する
     network_mode: host

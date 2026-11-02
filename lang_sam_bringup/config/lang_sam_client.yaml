@@ -4,7 +4,8 @@ image_topic: /image_raw                    # カメラ画像トピック名
 frame_topic: /lang_sam/frame               # 検出PCのlang_sam_trackerへ送るJPEGフレーム
 tracks_topic: /lang_sam/tracks             # 追跡結果(TrackArray)。lang_sam_person_followingも購読する
 track_mask_topic: /lang_sam/track_mask     # 追跡結果のインデックスマスク(16bit PNG)
-detections_topic: /lang_sam/detections     # 検出結果(左パネルの表示用)
+detections_lite_topic: /lang_sam/detections_lite   # 検出結果(マスク抜き。左パネルの表示用)
+detection_mask_topic: /lang_sam/detection_mask     # 検出マスク(16bit PNG)。非圧縮マスク付きの/lang_sam/detectionsは回線越しに重いため使わない
 jpeg_quality: 85                           # 送信JPEG品質。↓で通信量減/追跡精度低下
 stream_max_fps: 0.0                        # 送信フレームレート上限。0で無制限(カメラのレート)。回線・ブリッジが詰まる場合に下げる
 frame_buffer_size: 300                     # 結果と対応付けるため保持する送信済みフレーム数(遅延が大きい場合は増やす)
