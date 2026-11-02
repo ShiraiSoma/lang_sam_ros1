@@ -71,6 +71,11 @@ class LangSamClientNode:
         self.det_last_time = None
         self.det_fps = 0.0
 
+        # 処理時間・件数の計測(カクつき・遅延の切り分け用)。stats_log_sec周期でまとめてログ出力する
+        self._reset_stats()
+        if self.stats_log_sec > 0:
+            self.stats_timer = rospy.Timer(rospy.Duration(self.stats_log_sec), self._log_stats)
+
         self.frame_pub = rospy.Publisher(self.frame_topic, CompressedImage, queue_size=1)
         self.image_sub = rospy.Subscriber(
             self.image_topic, ROSImage, self.image_callback, queue_size=1, buff_size=IMAGE_BUFF_SIZE)
@@ -104,6 +109,33 @@ class LangSamClientNode:
         self.stream_max_fps = float(rospy.get_param('~stream_max_fps', 0.0))       # 送信フレームレートの上限。0以下で無制限(カメラのレート)
         self.frame_buffer_size = int(rospy.get_param('~frame_buffer_size', 300))   # 結果と対応付けるため保持する送信済みフレーム数
         self.visualize = bool(rospy.get_param('~visualize', True))
+        self.stats_log_sec = float(rospy.get_param('~stats_log_sec', 5.0))       # 計測ログを出す周期(秒)。0以下で無効
+
+    # --- 処理時間・件数の計測 ---
+    def _reset_stats(self):
+        """ロック取得済み、または初期化時に呼ぶこと"""
+        self.stats = {
+            'sent': 0, 'recv_tracks': 0, 'recv_masks': 0,    # 送信フレーム数 / 受信した追跡結果の各トピック数
+            'paired': 0,                                     # tracksとmaskの対応が取れた件数
+            'encode': [], 'render': [], 'rtt': [],           # JPEG化 / 描画 / 往復時間(秒)
+        }
+        self.stats_since = time.time()
+
+    def _log_stats(self, _event=None):
+        with self.lock:
+            s = self.stats
+            elapsed = max(time.time() - self.stats_since, 1e-6)
+            self._reset_stats()
+
+        def fmt(vals):
+            if not vals:
+                return '-'
+            return f'avg {1000 * sum(vals) / len(vals):.0f} / max {1000 * max(vals):.0f} ms'
+
+        rospy.loginfo(
+            f'[stats {elapsed:.0f}s] 送信 {s["sent"] / elapsed:.1f} fps (JPEG {fmt(s["encode"])}) | '
+            f'受信 tracks {s["recv_tracks"] / elapsed:.1f} / mask {s["recv_masks"] / elapsed:.1f} fps, '
+            f'対応付け {s["paired"] / elapsed:.1f} fps | 描画 {fmt(s["render"])} | RTT {fmt(s["rtt"])}')
 
     # --- EMA による FPS 更新の共通処理 ---
     def _update_ema_fps(self, now, last_name, fps_name):
@@ -132,6 +164,9 @@ class LangSamClientNode:
             rtt = now - entry[1] if entry is not None else None
             self.track_events.append((now, rtt))
             self._trim_track_events(now)
+            self.stats['paired'] += 1
+            if rtt is not None:
+                self.stats['rtt'].append(rtt)
 
     def _trim_track_events(self, now):
         while self.track_events and now - self.track_events[0][0] > STATS_WINDOW_SEC:
@@ -153,7 +188,9 @@ class LangSamClientNode:
             return
 
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        t_enc = time.perf_counter()
         ok, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+        t_enc = time.perf_counter() - t_enc
         if not ok:
             rospy.logwarn('JPEGエンコードに失敗したためフレームを送信しません')
             return
@@ -169,17 +206,23 @@ class LangSamClientNode:
             self.sent_frames[_stamp_key(frame_msg.header.stamp)] = (frame_msg.data, time.time())
             while len(self.sent_frames) > self.frame_buffer_size:
                 self.sent_frames.popitem(last=False)
+            self.stats['sent'] += 1
+            self.stats['encode'].append(t_enc)
 
         self.frame_pub.publish(frame_msg)
         self.last_sent_time = now
 
     # --- 追跡結果の受信 ---
     def _on_tracks(self, msg: TrackArray):
+        with self.lock:
+            self.stats['recv_tracks'] += 1
         pair = self._store_pending(self.pending_tracks, self.pending_masks, msg)
         if pair is not None:
             self._render_tracking(*pair)
 
     def _on_track_mask(self, msg: CompressedImage):
+        with self.lock:
+            self.stats['recv_masks'] += 1
         pair = self._store_pending(self.pending_masks, self.pending_tracks, msg)
         if pair is not None:
             self._render_tracking(pair[1], pair[0])
@@ -205,6 +248,7 @@ class LangSamClientNode:
         self._record_track_event(tracks_msg.header.stamp)
         if not self.visualize:
             return
+        t_render = time.perf_counter()
 
         frame = self._lookup_frame(tracks_msg.header.stamp)
         if frame is None:
@@ -231,6 +275,7 @@ class LangSamClientNode:
         view = self._compose(track_vis)
         with self.lock:
             self.latest_view = view
+            self.stats['render'].append(time.perf_counter() - t_render)
 
     # --- 検出結果の受信 ---
     def _on_detections(self, msg: DetectionArray):
