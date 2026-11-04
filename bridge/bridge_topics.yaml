@@ -1,0 +1,37 @@
+# parameter_bridge でブリッジするトピック一覧(docker-compose.yml が起動時に
+# ROS1パラメータ /lang_sam_bridge/topics として rosparam load する)
+#
+# dynamic_bridge はROS1マスターを毎秒ポーリングし、その際にROS1の全サービスへ
+# 1つずつTCP接続して型を調べる。roscoreがロボットPC(テザリング等の回線越し)に
+# あるとこれに毎秒~450msかかり、その間ROS1側のコールバック(単一スレッド)が止まって
+# フレームが10枚ずつまとめて届く/あふれた分が捨てられる現象が起きたため、
+# 必要なトピックだけを固定で列挙する parameter_bridge に切り替えている。
+#
+# - type はROS2側の型名
+# - queue_size: 1 で、詰まった時に古いメッセージを溜めず最新のみを渡す
+# - parameter_bridge は各トピックを双方向でブリッジする(自分自身が出したメッセージは
+#   ros1_bridge側で無視されるのでループはしない)
+# - トピックを追加・変更したら docker compose を再起動すること
+topics:
+  # ロボット(lang_sam_client) -> 検出PC(lang_sam_tracker)
+  - topic: /lang_sam/frame
+    type: sensor_msgs/msg/CompressedImage
+    queue_size: 1
+  # 検出PC(lang_sam_tracker) -> ロボット(lang_sam_client, lang_sam_person_following)
+  - topic: /lang_sam/tracks
+    type: lang_sam_msgs/msg/TrackArray
+    queue_size: 1
+  - topic: /lang_sam/track_mask
+    type: sensor_msgs/msg/CompressedImage
+    queue_size: 1
+  # 検出PC(lang_sam_detector) -> ロボット(lang_sam_client、左パネル表示用)
+  - topic: /lang_sam/detections_lite
+    type: lang_sam_msgs/msg/DetectionArray
+    queue_size: 1
+  - topic: /lang_sam/detection_mask
+    type: sensor_msgs/msg/CompressedImage
+    queue_size: 1
+
+# サービスはブリッジしない(未定義だと起動時に警告が出るため空で明示)
+services_1_to_2: []
+services_2_to_1: []

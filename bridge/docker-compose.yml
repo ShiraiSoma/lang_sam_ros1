@@ -2,9 +2,21 @@ services:
   ros1_bridge:
     build: .
     image: lang_sam_ros1_bridge:latest
-    # --bridge-all-topics(Dockerfileの既定CMD)だと/usb_cam/image_raw等の生画像まで全て転送して
-    # 回線を圧迫するため、反対側に購読者がいるトピックだけをブリッジする
-    command: ["ros2", "run", "ros1_bridge", "dynamic_bridge"]
+    # bridge_topics.yaml に列挙したトピックだけを parameter_bridge で固定ブリッジする。
+    # (dynamic_bridgeはROS1マスターの毎秒ポーリングで回線越しだと~450ms止まり、
+    #  フレームがまとめて届く/取りこぼす原因になったため。詳細はbridge_topics.yaml参照)
+    # トピック一覧はROS1パラメータとして読ませる必要があるため、起動前にrosparam loadする。
+    # rosparam(ROS1のPython CLI)はros1_envに隔離して実行する(entrypoint.shの注意書き参照)。
+    # roscore未起動ならrosparam loadが失敗してコンテナが終了し、restartで再試行される。
+    command:
+      - bash
+      - -c
+      - >-
+        micromamba run -n ros1_env rosparam load /bridge_topics.yaml /lang_sam_bridge &&
+        exec ros2 run ros1_bridge parameter_bridge
+        /lang_sam_bridge/topics /lang_sam_bridge/services_1_to_2 /lang_sam_bridge/services_2_to_1
+    volumes:
+      - ./bridge_topics.yaml:/bridge_topics.yaml:ro
     # ROS1のTCPROS(roscore探索)とROS2のDDSマルチキャスト探索の両方が必要なため、
     # コンテナのネットワークをホストと共有する
     network_mode: host

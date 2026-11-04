@@ -72,13 +72,11 @@ export ROS_IP=<この検出PCのIP>
 export ROS_DOMAIN_ID=<lang_sam_detectorと共通のID>
 
 docker compose up
-# または:
-docker run --rm --network host --ipc host \
-  -e ROS_MASTER_URI=$ROS_MASTER_URI \
-  -e ROS_IP=$ROS_IP \
-  -e ROS_DOMAIN_ID=$ROS_DOMAIN_ID \
-  lang_sam_ros1_bridge
 ```
+
+`docker compose` では、[bridge_topics.yaml](bridge_topics.yaml) に列挙したトピックだけを
+`parameter_bridge` で固定ブリッジする(後述)。`docker run ... lang_sam_ros1_bridge` で直接起動した場合は
+イメージ既定の `dynamic_bridge --bridge-all-topics` になる(全トピックを転送するので実運用では使わない)。
 
 - `--network host`: ROS1のTCPROS接続とROS2のDDS探索の両方を、コンテナがホストと同じネットワーク上で
   行う必要があるため必須。
@@ -89,6 +87,37 @@ docker run --rm --network host --ipc host \
   実データが一切subscriber側に届かないという現象が発生した(コンテナ内外の別ビルドのFast-DDS間で
   SHMセグメントの受け渡しに失敗する既知の類の問題)。UDPv4のみに強制することで解消することを
   実機で確認済み。**detector側(ホストのlang_sam_detector)は変更不要**、このコンテナ側だけの設定で足りる。
+
+## ブリッジするトピック(parameter_bridge)
+
+`docker compose` は起動時に [bridge_topics.yaml](bridge_topics.yaml) をROS1パラメータ
+(`/lang_sam_bridge/topics`)として読み込み、そこに列挙したトピックだけを `parameter_bridge` でブリッジする。
+トピックを追加・変更したら `docker compose down && docker compose up` で再起動する。
+
+| トピック | 向き | 型 |
+|---|---|---|
+| `/lang_sam/frame` | ロボット → 検出PC | `sensor_msgs/msg/CompressedImage` |
+| `/lang_sam/tracks` | 検出PC → ロボット | `lang_sam_msgs/msg/TrackArray` |
+| `/lang_sam/track_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
+| `/lang_sam/detections_lite` | 検出PC → ロボット | `lang_sam_msgs/msg/DetectionArray` |
+| `/lang_sam/detection_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
+
+旧構成(ロボットPCで`lang_sam_tracker`)で使う場合は、`/lang_sam/detect_request`
+(`sensor_msgs/msg/CompressedImage`)と `/lang_sam/detections`(`lang_sam_msgs/msg/DetectionArray`)を追加すること。
+
+### なぜ dynamic_bridge ではないのか
+
+`dynamic_bridge` はROS1マスターを**毎秒**ポーリングし、そのたびにROS1側の全サービス
+(各ノードの`get_loggers`、`usb_cam`の`set_camera_info`等)へ1つずつTCP接続して型を調べる。
+このポーリングはROS1側の唯一のコールバックスレッド(`AsyncSpinner(1)`)上で動くため、実行中は
+トピックの転送も止まる。roscoreがロボットPC(テザリング越し)にある実機構成では、これに毎秒~450msかかり、
+rosbagで以下が確認された:
+
+- 検出PCへのフレーム到着がちょうど1.0秒周期で~450ms途切れ、明けにキュー上限(10)の**10枚が同時に到着**
+- あふれた分が破棄され、ロボットが送ったフレームの**26%が届かない**
+- まとめて届いた10枚をtrackerが古い順に処理するため、RTT(送信→追跡結果受信)が~475msに増大
+
+`parameter_bridge` はポーリングを行わず、`queue_size: 1` で古いメッセージも溜めない。
 
 ## 動作確認
 
@@ -102,10 +131,9 @@ ros2 topic list | grep lang_sam
 ros2 topic hz /lang_sam/frame
 ```
 
-双方に `/lang_sam/frame`, `/lang_sam/tracks`, `/lang_sam/track_mask`, `/lang_sam/detections` が現れ、
+起動ログに `create bidirectional bridge for topic ...` が上表の5トピック分出ていること、
 `lang_sam_client` の起動後に `rostopic hz`/`ros2 topic hz` でデータが流れていることを確認する。
-(標準構成では `/lang_sam/detect_request` は検出PCのROS2内で完結するためブリッジされない。
-旧構成(ロボットPCで`lang_sam_tracker`)の場合は `/lang_sam/detect_request`, `/lang_sam/detections` を確認する)
+`ros2 topic hz /lang_sam/frame` の `max` が数百msに跳ねず、送信レート(既定30Hz)に近ければ正常。
 
 ## 動作検証の方法(このホストだけで疑似2台構成を再現する場合)
 

@@ -13,12 +13,15 @@ lang_sam_server.launch.py (lang_sam_ros2)                    lang_sam_client (�
   lang_sam_tracker (Cutie)                                     pub: /lang_sam/frame (JPEG)
     sub: /lang_sam/frame        <--bridge--                    sub: /lang_sam/tracks
     pub: /lang_sam/tracks       --bridge-->                    sub: /lang_sam/track_mask (16bit PNG)
-    pub: /lang_sam/track_mask   --bridge-->                    sub: /lang_sam/detections
-      ▲ detect_request / detections (ROS2内で完結)           lang_sam_person_following
-      ▼                                                        sub: /lang_sam/tracks
-  lang_sam_detector (LangSAM)                                  pub: /cmd_vel
-    pub: /lang_sam/detections   --bridge-->
+    pub: /lang_sam/track_mask   --bridge-->                    sub: /lang_sam/detections_lite
+      ▲ detect_request / detections (ROS2内で完結)             sub: /lang_sam/detection_mask (16bit PNG)
+      ▼                                                      lang_sam_person_following
+  lang_sam_detector (LangSAM)                                  sub: /lang_sam/tracks
+    pub: /lang_sam/detections_lite --bridge-->                 pub: /cmd_vel
+    pub: /lang_sam/detection_mask  --bridge-->
 ```
+
+ブリッジは[bridge/bridge_topics.yaml](bridge/bridge_topics.yaml)に列挙した上記5トピックだけを`parameter_bridge`で転送する(理由は[bridge/README.md](bridge/README.md)参照)。
 
 結果には送信したフレームと同じ`header.stamp`が付いて返ってくるので、`lang_sam_client`は手元に保持している元フレームに結果を重ねて表示する(結果画像そのものは転送しない)。
 
@@ -96,7 +99,7 @@ docker compose up
 
 起動後、以下で双方向にトピックが見えることを確認する。
 ```bash
-rostopic list          # ROS1側:  /lang_sam/frame, /lang_sam/tracks, /lang_sam/track_mask, /lang_sam/detections が見える
+rostopic list          # ROS1側:  /lang_sam/frame, /lang_sam/tracks, /lang_sam/track_mask, /lang_sam/detections_lite, /lang_sam/detection_mask が見える
 ros2 topic list        # ROS2側: 同上
 ```
 
