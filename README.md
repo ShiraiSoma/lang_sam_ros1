@@ -54,7 +54,7 @@ source devel/setup.bash
 ```bash
 export ROS_DOMAIN_ID=<検出PCとブリッジホストで共通のID>
 ros2 launch lang_sam_executor lang_sam_server.launch.py   # detector + tracker(Cutie)を1プロセスで起動
-# 地面追従+障害物回避で走らせる場合は代わりに(ground_navの/cmd_velがブリッジ経由でロボットへ届く):
+# 地面追従+障害物回避で走らせる場合は代わりに(ground_navの速度指令/icart_mini/cmd_velがブリッジ経由で足回りへ届く):
 # ros2 launch lang_sam_executor lang_sam_ground_nav.launch.py
 ```
 

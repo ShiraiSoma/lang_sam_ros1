@@ -101,7 +101,7 @@ docker compose up
 | `/lang_sam/track_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
 | `/lang_sam/detections_lite` | 検出PC → ロボット | `lang_sam_msgs/msg/DetectionArray` |
 | `/lang_sam/detection_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
-| `/cmd_vel` | 検出PC → ロボット | `geometry_msgs/msg/Twist` |
+| `/icart_mini/cmd_vel` | 検出PC → ロボット(足回り) | `geometry_msgs/msg/Twist` |
 
 旧構成(ロボットPCで`lang_sam_tracker`)で使う場合は、`/lang_sam/detect_request`
 (`sensor_msgs/msg/CompressedImage`)と `/lang_sam/detections`(`lang_sam_msgs/msg/DetectionArray`)を追加すること。

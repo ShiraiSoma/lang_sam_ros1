@@ -32,7 +32,9 @@ topics:
     type: sensor_msgs/msg/CompressedImage
     queue_size: 1
   # 検出PC(lang_sam_ground_nav: 地面追従+障害物回避) -> ロボットの足回り
-  - topic: /cmd_vel
+  # ORNE-box(iCart mini)の足回りはdiff_drive_controller(名前: icart_mini)が/icart_mini/cmd_velを購読する。
+  # 別のロボットではlang_sam_ground_nav.launch.pyのcmd_vel_topicと合わせて変更すること
+  - topic: /icart_mini/cmd_vel
     type: geometry_msgs/msg/Twist
     queue_size: 1
 
