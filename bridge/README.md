@@ -101,6 +101,7 @@ docker compose up
 | `/lang_sam/track_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
 | `/lang_sam/detections_lite` | 検出PC → ロボット | `lang_sam_msgs/msg/DetectionArray` |
 | `/lang_sam/detection_mask` | 検出PC → ロボット | `sensor_msgs/msg/CompressedImage` |
+| `/cmd_vel` | 検出PC → ロボット | `geometry_msgs/msg/Twist` |
 
 旧構成(ロボットPCで`lang_sam_tracker`)で使う場合は、`/lang_sam/detect_request`
 (`sensor_msgs/msg/CompressedImage`)と `/lang_sam/detections`(`lang_sam_msgs/msg/DetectionArray`)を追加すること。
@@ -131,7 +132,7 @@ ros2 topic list | grep lang_sam
 ros2 topic hz /lang_sam/frame
 ```
 
-起動ログに `create bidirectional bridge for topic ...` が上表の5トピック分出ていること、
+起動ログに `create bidirectional bridge for topic ...` が上表の6トピック分出ていること、
 `lang_sam_client` の起動後に `rostopic hz`/`ros2 topic hz` でデータが流れていることを確認する。
 `ros2 topic hz /lang_sam/frame` の `max` が数百msに跳ねず、送信レート(既定30Hz)に近ければ正常。
 

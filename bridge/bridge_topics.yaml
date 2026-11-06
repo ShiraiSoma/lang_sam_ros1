@@ -31,6 +31,10 @@ topics:
   - topic: /lang_sam/detection_mask
     type: sensor_msgs/msg/CompressedImage
     queue_size: 1
+  # 検出PC(lang_sam_ground_nav: 地面追従+障害物回避) -> ロボットの足回り
+  - topic: /cmd_vel
+    type: geometry_msgs/msg/Twist
+    queue_size: 1
 
 # サービスはブリッジしない(未定義だと起動時に警告が出るため空で明示)
 services_1_to_2: []
