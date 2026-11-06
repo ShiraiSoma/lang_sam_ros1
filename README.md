@@ -15,9 +15,9 @@ lang_sam_server.launch.py (lang_sam_ros2)                    lang_sam_client (�
     pub: /lang_sam/tracks       --bridge-->                    sub: /lang_sam/track_mask (16bit PNG)
     pub: /lang_sam/track_mask   --bridge-->                    sub: /lang_sam/detections_lite
       ▲ detect_request / detections (ROS2内で完結)             sub: /lang_sam/detection_mask (16bit PNG)
-      ▼                                                      lang_sam_person_following
-  lang_sam_detector (LangSAM)                                  sub: /lang_sam/tracks
-    pub: /lang_sam/detections_lite --bridge-->                 pub: /cmd_vel
+      ▼
+  lang_sam_detector (LangSAM)
+    pub: /lang_sam/detections_lite --bridge-->
     pub: /lang_sam/detection_mask  --bridge-->
 ```
 
@@ -27,7 +27,7 @@ lang_sam_server.launch.py (lang_sam_ros2)                    lang_sam_client (�
 
 - `lang_sam_msgs`: ROS2側(lang_sam_ros2/lang_sam_msgs)とフィールド定義が完全一致するROS1版を本リポジトリに同梱。`ros1_bridge`の動的ブリッジは、パッケージ名・メッセージ名・フィールドが一致するカスタムメッセージを自動でマッピングできる。
 - `lang_sam_client`: ROS2版`lang_sam_client`をrospyに移植したもの。推論を行わないためtorch不要(opencv, pillow, supervisionのみ)。
-- `lang_sam_person_following`: ROS2版をroscppに移植したもの。
+- `lang_sam_person_following`: ROS2版をroscppに移植したもの。`/cmd_vel`を使わないため、現在はどのlaunchからも起動しない(パッケージのみ残している)。
 - `lang_sam_tracker`: Cutie追跡をロボットPC(ROS1)側で動かす旧構成用(後述)。ロボットPCにGPUがある場合のみ使う。
 - `lang_sam_bringup`: ロボットPC(ROS1)側を起動するlaunchファイル・パラメータ一式(ROS2版`lang_sam_executor`に相当)。
 - 検出PC側のノード(`lang_sam_detector`, `lang_sam_tracker`, `lang_sam_server_node.py`)はこのリポジトリには含まない。`lang_sam_ros2`側のものをそのまま使う。
@@ -60,7 +60,7 @@ ros2 launch lang_sam_executor lang_sam_server.launch.py   # detector + tracker(C
 ```bash
 export ROS_MASTER_URI=http://<roscoreを動かすホスト>:11311
 export ROS_IP=<このPCのIP>
-roslaunch lang_sam_bringup lang_sam_client.launch          # client(送信・描画) + person_following
+roslaunch lang_sam_bringup lang_sam_client.launch          # client(送信・描画)
 ```
 
 左に検出結果、右に追跡結果を並べたウィンドウがロボットPC上に表示される。
@@ -73,7 +73,7 @@ roslaunch lang_sam_bringup lang_sam_client.launch          # client(送信・描
 `/lang_sam/tracks`の発行元が2つになる)。
 
 ```bash
-roslaunch lang_sam_bringup lang_sam_tracker.launch         # tracker(Cutie) + person_following
+roslaunch lang_sam_bringup lang_sam_tracker.launch         # tracker(Cutie)
 ```
 
 ---
